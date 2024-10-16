@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Map Display for Selected Participants</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        #map {
+            width: 100%;
+            height: 600px;
+        }
+        .input-container {
+            display: flex;
+            justify-content: center;
+            padding: 20px;
+            background-color: #f8f8f8;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        #bibInput {
+            width: 70%;
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            margin-right: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 4px;
+            background-color: #28a745;
+            color: white;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #218838;
+        }
+        .marker {
+            border-radius: 50%;
+            color: white;
+            text-align: center;
+            line-height: 20px;
+            width: 30px;
+            height: 30px;
+            font-size: 9px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-weight: bold;
+            border: 2px solid black;
+        }
+    </style>
+</head>
+<body>
+    <div class="input-container">
+        <label for="bibInput">Comparison:</label>
+        <input type="text" id="bibInput" placeholder="e.g., 5387,4705" />
+        <button onclick="startFetchingParticipants()">Submit</button>
+    </div>
+    <div id="map"></div>
+
+    <script>
+        // Initialize the map
+        var map = L.map('map').setView([29.384684, 47.983885], 14);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+        }).addTo(map);
+
+        // Variables for later use
+        let pathCoordinates = [];
+        let selectedBibs = [];
+        let markers = [];  // Array to hold the markers
+
+        // Load GeoJSON path data
+        fetch('https://mocki.io/v1/5347b82b-470b-4b27-8fb5-4abdf238df6c')
+            .then(response => response.json())
+            .then(geojsonData => {
+                L.geoJSON(geojsonData).addTo(map);
+                pathCoordinates = geojsonData.features[0].geometry.coordinates;
+            })
+            .catch(error => console.error('Error fetching GeoJSON:', error));
+
+        // Start fetching participants based on input BIB numbers
+        function startFetchingParticipants() {
+            const bibInput = document.getElementById('bibInput').value;
+            if (!bibInput) {
+                alert('Please enter BIB numbers');
+                return;
+            }
+
+            selectedBibs = bibInput.split(',').map(bib => parseInt(bib.trim()));
+            fetchParticipantsData();  // Initial fetch
+        }
+
+        // Fetch participants data
+        function fetchParticipantsData() {
+            // Adjusting the fetch request with CORS and possible headers
+            fetch('https://api.raceresult.com/214361/HC7WTRBQ8Y8V6962SVGF6VAKMOFPGD2T', {
+                method: 'GET',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.statusText);
+                }
+                return response.json();
+            })
+            .then(participantsData => {
+                if (selectedBibs.length > 0) {
+                    participantsData = participantsData.filter(participant => selectedBibs.includes(participant.BIB));
+                }
+                processParticipants(participantsData);
+            })
+            .catch(error => console.error('Error fetching participant data:', error));
+        }
+
+        // Process participants and create markers
+        function processParticipants(participantsData) {
+            markers.forEach(marker => map.removeLayer(marker));
+            markers = [];
+
+            participantsData.forEach(participant => {
+                let checkpointsString = participant.checkpoints;
+                let checkpoints = checkpointsString.split('],[').map(item => {
+                    let coords = item.replace(/[\[\]]/g, '').split(',');
+                    return coords.map(Number);
+                });
+
+                let participantData = {
+                    bib: participant.BIB,
+                    checkpoints: checkpoints
+                };
+
+                let marker = animateParticipant(participantData);
+                markers.push(marker);
+            });
+        }
+
+        function getRandomColor() {
+            const letters = '0123456789ABCDEF';
+            let color = '#';
+            for (let i = 0; i < 6; i++) {
+                color += letters[Math.floor(Math.random() * 16)];
+            }
+            return color;
+        }
+
+        function createCustomMarker(bib) {
+            const color = getRandomColor();
+            return L.divIcon({
+                className: `marker`,
+                html: `<div style="display: flex; justify-content: center; align-items: center; height: 30px; width: 30px; background-color: ${color}; color: white; border-radius: 50%; border: 2px solid black;">${bib}</div>`,
+                iconSize: [30, 30],
+                iconAnchor: [15, 15]
+            });
+        }
+
+        function getTooltipContent(speed) {
+            return `Speed: ${speed}km/h`;
+        }
+
+        function animateParticipant(participant) {
+            let marker = L.marker(participant.checkpoints[0].slice(0, 2), {
+                icon: createCustomMarker(participant.bib)
+            }).addTo(map);
+
+            marker.bindTooltip(getTooltipContent(participant.checkpoints[0][2]), {
+                permanent: true,
+                direction: 'left',
+                offset: [0, -30],
+                opacity: 0.8
+            });
+
+            animateCheckpoint(marker, participant.checkpoints, pathCoordinates, 0);
+            return marker;
+        }
+
+        function matchLocation(location, pathCoordinates) {
+            for (let i = 0; i < pathCoordinates.length; i++) {
+                if (pathCoordinates[i][0] === location[0] && pathCoordinates[i][1] === location[1]) {
+                    return i;
+                }
+            }
+            return null;
+        }
+
+        function animateCheckpoint(marker, checkpoints, pathCoordinates, checkpointIndex) {
+            if (checkpointIndex >= checkpoints.length - 1) return;
+
+            let startCheckpoint = checkpoints[checkpointIndex].slice(0, 2);
+            let endCheckpoint = checkpoints[checkpointIndex + 1].slice(0, 2);
+            let speed = checkpoints[checkpointIndex + 1][2];
+
+            let matchedStartIndex = matchLocation(startCheckpoint, pathCoordinates);
+            let matchedEndIndex = matchLocation(endCheckpoint, pathCoordinates);
+
+            if (matchedStartIndex !== null && matchedEndIndex !== null) {
+                let segment = pathCoordinates.slice(matchedStartIndex, matchedEndIndex + 1);
+
+                marker.setTooltipContent(getTooltipContent(speed));
+
+                animateMarker(marker, segment, speed, () => {
+                    animateCheckpoint(marker, checkpoints, pathCoordinates, checkpointIndex + 1);
+                });
+            }
+        }
+
+        function animateMarker(marker, segment, speed, onFinish) {
+            let index = 0;
+            let totalSteps = segment.length * 10;
+            let speedFactor = 1000 / (speed * 2);
+
+            let stepInterval = setInterval(() => {
+                if (index < totalSteps) {
+                    let positionIndex = Math.floor(index / 10);
+                    let nextPositionIndex = Math.min(positionIndex + 1, segment.length - 1);
+                    let lat = segment[positionIndex][1] + (segment[nextPositionIndex][1] - segment[positionIndex][1]) * (index % 10) / 10;
+                    let lng = segment[positionIndex][0] + (segment[nextPositionIndex][0] - segment[positionIndex][0]) * (index % 10) / 10;
+
+                    marker.setLatLng([lat, lng]);
+                    index++;
+                } else {
+                    clearInterval(stepInterval);
+                    onFinish();
+                }
+            }, speedFactor);
+        }
+    </script>
+</body>
+</html>
